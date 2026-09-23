@@ -237,6 +237,8 @@ suites:
           "5.enum": {desc: "The request tool schema requires string alongside an enum containing string \"null\" and JSON null; the type excludes JSON null.", required: false}
           "4.mixed_labels": {desc: Mixed nullable label and note with a literal string field, required: false}
           "4.mixed_grep": {desc: Mixed string pattern and nullable path under a strict tool schema, required: false}
+          g: {desc: Nullable and composed scalar schemas preserve JSON scalar types, required: false}
+          h: {desc: String argument boundaries and literal null text remain exact, required: false}
       "8":
         title: Narration around calls
         required: true
