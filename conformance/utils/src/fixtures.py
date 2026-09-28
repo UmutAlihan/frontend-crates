@@ -328,7 +328,8 @@ SPLIT_PARENT_SUBCASES = {
 # tab. Only sub-cases that actually exist in fixtures become columns; the rest
 # fill in over time. Streaming-only cases with no batch analog use the >=50 band.
 STREAM_SUB_CASE_GROUPS = BATCH_SUB_CASE_GROUPS + [
-    ("Partial-token", ("50", "50.a")),
+    ("Partial-token", ("50",)),
+    ("Reasoning projection", ("51.a",)),
 ]
 
 SUB_CASE_GROUPS_BY_MODE = {
@@ -401,8 +402,11 @@ def _subcase_group_key(mode: str, sub: str) -> str:
 
 def _discover_sub_cases(mode: str, cases: dict) -> list[str]:
     """Union of sub-case IDs across all loaded fixtures, in stable order."""
+    taxonomy = yaml.safe_load((REPO_ROOT / "case-taxonomy.yaml").read_text())
+    suite = "toolcalling.stream" if mode == "streamv1" else "toolcalling.batch"
+    retired = set((taxonomy.get("retired_subcases") or {}).get(suite, []))
     return sorted(
-        {sub for _fam, sub in cases.keys()}, key=lambda s: _sub_sort_key(mode, s)
+        {sub for _fam, sub in cases.keys() if sub not in retired}, key=lambda s: _sub_sort_key(mode, s)
     )
 
 

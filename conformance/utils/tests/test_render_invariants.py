@@ -16,6 +16,7 @@ rendered stream cells depend on).
 """
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -39,7 +40,8 @@ STREAM_SRC = FIXTURES_ROOT / "toolcalling" / "fixtures-stream-v1"
 def test_stream_regression_cases_share_their_parent_case_bands():
     assert fixtures._subcase_group_key("streamv1", "7.g") == "args"
     assert fixtures._subcase_group_key("streamv1", "7.h") == "args"
-    assert fixtures._subcase_group_key("streamv1", "50.a") == "partial_token"
+    assert fixtures._subcase_group_key("streamv1", "51.a") == "reasoning_projection"
+    assert "50.a" not in fixtures._discover_sub_cases("streamv1", {("deepseek_v4", "50.a"): {}, ("deepseek_v4", "51.a"): {}})
 
 pytestmark = pytest.mark.skipif(
     not STREAM_SRC.is_dir(), reason="conformance fixtures not downloaded"
@@ -53,6 +55,97 @@ def _dynamo_version_dirs() -> list[tuple[str, Path]]:
             out.append((d.name.split("-", 1)[1], d))
     out.sort(key=lambda t: version_key(t[0]))
     return out
+
+
+def test_stream_regression_inputs_keep_only_non_null_values_and_reference_prs():
+    expected = {
+        "TOOLCALLING.streamv1.7.g": (
+            {"glm47", "qwen3_coder", "minimax_m2", "minimax_m3"},
+            "https://github.com/ai-dynamo/frontend-crates/pull/248",
+        ),
+        "TOOLCALLING.streamv1.7.h": (
+            {"deepseek_v4", "glm47", "gemma4", "kimi_k2", "kimi_k3", "minimax_m3", "muse_glimmer"},
+            "https://github.com/ai-dynamo/frontend-crates/pull/247",
+        ),
+        "TOOLCALLING.streamv1.51.a": (
+            {"deepseek_v4", "kimi_k3", "muse_glimmer"},
+            "https://github.com/ai-dynamo/frontend-crates/pull/253",
+        ),
+    }
+    found = {case_id: {} for case_id in expected}
+    for path in (STREAM_SRC / "inputs").glob("*/*.yaml"):
+        document = yaml.safe_load(path.read_text()) or {}
+        for case_id in expected:
+            case = (document.get("cases") or {}).get(case_id)
+            if case is not None:
+                found[case_id][document["family"]] = case
+
+    for case_id, (families, reference) in expected.items():
+        assert set(found[case_id]) == families
+        for case in found[case_id].values():
+            assert case["ref"] == reference
+            pending = [case]
+            while pending:
+                value = pending.pop()
+                if isinstance(value, dict):
+                    pending.extend(value.values())
+                elif isinstance(value, list):
+                    pending.extend(value)
+                else:
+                    assert value is not None and value != "null", (case_id, value)
+
+    scalar_case = found["TOOLCALLING.streamv1.7.g"]["glm47"]
+    scalar_properties = scalar_case["tools"][0]["parameters"]["properties"]
+    assert scalar_properties == {
+        "count": {"anyOf": [{"type": "integer"}]},
+        "ratio": {"type": ["number"]},
+        "enabled": {"type": ["boolean"]},
+    }
+    string_case = found["TOOLCALLING.streamv1.7.h"]["glm47"]
+    string_properties = string_case["tools"][0]["parameters"]["properties"]
+    assert set(string_properties) == {"spaced", "blank", "empty"}
+    assert all(value["type"] == "string" for value in string_properties.values())
+
+
+@pytest.mark.parametrize(("case_id", "families", "arguments"), [
+    ("TOOLCALLING.streamv1.7.g", {"glm47", "qwen3_coder", "minimax_m2", "minimax_m3"},
+     {"count": 42, "ratio": 1.25, "enabled": False}),
+    ("TOOLCALLING.streamv1.7.h", {"deepseek_v4", "glm47", "gemma4", "kimi_k2", "kimi_k3", "minimax_m3", "muse_glimmer"},
+     {"spaced": "  café\n", "blank": "\t\r\n ", "empty": ""}),
+    ("TOOLCALLING.streamv1.51.a", {"deepseek_v4", "kimi_k3", "muse_glimmer"},
+     {"location": "Paris"}),
+])
+def test_retained_stream_regression_captures_preserve_semantics(case_id, families, arguments):
+    versions = _dynamo_version_dirs()
+    assert versions, "no retained Dynamo stream captures are available"
+    latest_version = versions[-1][0]
+    captures_found = 0
+    for version, root in versions:
+        found = {}
+        for path in root.glob("*/*.yaml"):
+            document = yaml.safe_load(path.read_text())
+            case = document["cases"].get(case_id)
+            if case is None:
+                continue
+            complete = [event for chunk in case["chunks"] for event in chunk.get("expected", []) if event.get("complete")]
+            assert len(complete) == 1, (path, case_id)
+            captured_arguments = json.loads(complete[0]["arguments"])
+            assert captured_arguments == arguments, (path, case_id)
+            found[path.parent.name] = "".join(chunk.get("normal_text", "") for chunk in case["chunks"])
+        if version == latest_version:
+            assert set(found) == families
+        if not found:
+            continue
+        captures_found += 1
+        assert set(found) <= families
+        if case_id == "TOOLCALLING.streamv1.51.a":
+            expected_normal_text = {
+                "deepseek_v4": "before<think>reason</think>after",
+                "kimi_k3": "reasonafter",
+                "muse_glimmer": "reasonafter",
+            }
+            assert found == {family: expected_normal_text[family] for family in found}
+    assert captures_found > 0
 
 
 # --- folding a higher dynamo version reproduces that version's docs exactly ----

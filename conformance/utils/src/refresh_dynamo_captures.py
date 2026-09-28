@@ -40,6 +40,7 @@ import yaml
 
 from dynamo_version import crate_version, dynamo_v2_label
 from fixture_snapshot import fixture_snapshot_root
+import stream_capture_archive
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent.parent  # conformance/utils/src -> repo root
@@ -200,7 +201,7 @@ def refresh_batch(v1_ver: str) -> None:
     print(f"[batch] wrote {out_root.name} ({n_batch} batch + {n_stream} jail-stream cases)")
 
 
-def refresh_stream(v2_ver: str) -> None:
+def refresh_stream(v2_ver: str, receipt_path: Path | None = None) -> None:
     tree = ensure_tree("fixtures-stream-v1")
     inputs = tree / "inputs"
     # The current-version dir is (re)written in place; OLDER version dirs
@@ -210,17 +211,26 @@ def refresh_stream(v2_ver: str) -> None:
     if out_root.is_dir():
         shutil.rmtree(out_root)
     n_cases = 0
+    receipt_cases = {}
     for family in V2_FAMILIES:
         fam_dir = inputs / family
         if not fam_dir.is_dir():
             print(f"[stream] {family}: no inputs, skipped")
             continue
         for fp in sorted(fam_dir.glob("TOOLCALLING.stream*.yaml")):
-            src = yaml.safe_load(fp.read_text())
+            input_payload = fp.read_bytes()
+            src = yaml.safe_load(input_payload)
             extra = ["--text"] if family == "harmony_text" else []
-            rec = json.loads(
-                run_bin("dynamo-parsers-v2", "record_dynamo_stream", [str(fp), *extra])
-            )
+            with tempfile.TemporaryDirectory(prefix="dynamo-stream-input-") as temporary:
+                snapshot_path = Path(temporary) / fp.name
+                snapshot_path.write_bytes(input_payload)
+                rec = json.loads(
+                    run_bin(
+                        "dynamo-parsers-v2",
+                        "record_dynamo_stream",
+                        [str(snapshot_path), *extra],
+                    )
+                )
             cases_out = {}
             source_cases = src.get("cases") or {}
             for cid, case in source_cases.items():
@@ -241,6 +251,14 @@ def refresh_stream(v2_ver: str) -> None:
                         entry["normal_text"] = ch["normal_text"]
                     out_chunks.append(entry)
                 cases_out[cid] = {"chunks": out_chunks}
+            relative = fp.relative_to(inputs).as_posix()
+            receipt_cases[relative] = {
+                cid: {
+                    "input_sha256": stream_capture_archive.case_sha256(case),
+                    "result_sha256": stream_capture_archive.case_sha256(cases_out[cid]),
+                }
+                for cid, case in source_cases.items()
+            }
             n_cases += len(cases_out)
             doc = {
                 "family": family,
@@ -253,6 +271,20 @@ def refresh_stream(v2_ver: str) -> None:
             dst.write_text(dump_yaml(doc, SPDX))
         print(f"[stream] {family}: recorded")
     print(f"[stream] wrote {out_root.name} ({n_cases} cases)")
+    if receipt_path is not None:
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.write_text(
+            json.dumps(
+                {
+                    "format": "dynamo-stream-capture-receipt-v1",
+                    "captures": {out_root.name: receipt_cases},
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        print(f"[stream] wrote capture receipt {receipt_path}")
 
 
 def refresh_batch_on_stream(v2_ver: str) -> None:
@@ -339,8 +371,18 @@ def main() -> int:
         "--label", default=None,
         help="current crate version or 'current'; source-qualified labels are rejected.",
     )
+    ap.add_argument(
+        "--receipt",
+        type=Path,
+        default=None,
+        help="write a case-level input/result hash receipt for stream captures",
+    )
     args = ap.parse_args()
     modes = args.modes or ["batch", "stream", "batch-on-stream"]
+    if args.receipt is not None and "stream" not in modes:
+        ap.error("--receipt requires the stream mode")
+    if args.receipt is not None:
+        args.receipt.unlink(missing_ok=True)
 
     v1_ver = crate_version(ROOT / "parsers" / "v1" / "Cargo.toml")
     v2_ver = dynamo_v2_label(ROOT, args.label)
@@ -349,7 +391,7 @@ def main() -> int:
     if "batch" in modes:
         refresh_batch(v1_ver)
     if "stream" in modes:
-        refresh_stream(v2_ver)
+        refresh_stream(v2_ver, args.receipt)
     if "batch-on-stream" in modes:
         refresh_batch_on_stream(v2_ver)
     return 0

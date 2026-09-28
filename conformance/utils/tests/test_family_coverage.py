@@ -62,6 +62,16 @@ def test_lint_green_on_committed_corpus() -> None:
     assert report.failures == []
 
 
+def test_retired_stream_id_requires_explicit_declaration() -> None:
+    taxonomy = _taxonomy()
+    taxonomy["retired_subcases"] = {}
+    report = cfc.Report()
+
+    cfc.check_suite(report, taxonomy, _ensure_fixtures(), "toolcalling.stream", "deepseek_v4", set())
+
+    assert any("TOOLCALLING.streamv1.50.a is not in the taxonomy" in failure for failure in report.failures)
+
+
 def test_lint_fails_on_inkling_shaped_family(tmp_path) -> None:
     """A family with the PR #120 gap profile fails the lint: batch groups 6/8/30
     absent, the entire legacy stream corpus missing, and no `markers:` registration."""

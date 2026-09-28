@@ -116,9 +116,9 @@ def _tar_dir(src_abs, arcname, out_path):
     return sha256_file(out_path), out_path.stat().st_size
 
 
-def stage_fixtures(conformance_root, tmpdir):
+def stage_fixtures(conformance_root, tmpdir, *, trees=None):
     """Copy all fixture trees into tmpdir, preserving the relative layout."""
-    all_trees = list(PER_SUBDIR_TREES) + [src for src, _ in WHOLE_TREE_SHARDS]
+    all_trees = trees if trees is not None else list(PER_SUBDIR_TREES) + [src for src, _ in WHOLE_TREE_SHARDS]
     for tree_rel in all_trees:
         src = conformance_root / tree_rel
         dst = tmpdir / tree_rel
@@ -171,12 +171,13 @@ def build_shards(
     dry_run=False,
     *,
     history_root=None,
+    trees=None,
 ):
     """Build per-version shard tarballs and whole-tree shards. Returns list of shard dicts."""
     shards = []
     inactive = preserved_evidence()
 
-    for tree_rel in PER_SUBDIR_TREES:
+    for tree_rel in (trees if trees is not None else PER_SUBDIR_TREES):
         tree_abs = tmpdir / tree_rel
         if tree_rel == "unified":
             history_root = Path(history_root or UNIFIED_HISTORY_DIR)
@@ -301,6 +302,8 @@ def sync_store(
     *,
     fixtures_dir=None,
     manifest_path=None,
+    approved_stream_replacements=frozenset(),
+    stream_capture_receipt=None,
 ):
     """Copy built shards into conformance/fixtures/.
 
@@ -308,37 +311,88 @@ def sync_store(
     the local capture trees are often partial (one family recaptured, the rest
     absent), and mirroring a partial tree would silently drop shards. Capture
     versions are additive by design — a re-record ADDS a version subdir, so
-    its shard joins the set; pruning is only for deliberately retired trees.
+    its shard joins the set. Existing stream results can change only for case
+    IDs explicitly approved by the caller; pruning is for deliberately retired trees.
     """
     fixtures_dir = Path(fixtures_dir or FIXTURES_DIR)
     new_paths = {s["path"] for s in shards}
+    manifest_path = Path(manifest_path or ROOT / MANIFEST_REL)
     inactive = preserved_evidence(manifest_path=manifest_path, fixtures_dir=fixtures_dir)
     if new_paths & inactive.keys():
         raise ValueError(f"cannot overwrite inactive evidence: {sorted(new_paths & inactive.keys())}")
-    # Versioned archive fixtures remain immutable except a current Dynamo v2 stream
-    # capture may gain an authored chore case while preserving every prior result.
+    stream_inputs_path = "toolcalling/fixtures-stream-v1/inputs.tar.gz"
+    stream_inputs = next((s for s in shards if s["path"] == stream_inputs_path), None)
+    allowed_stream_cases = set()
+    corrected_stream_cases = set()
+    if stream_inputs is not None:
+        existing_inputs = fixtures_dir / stream_inputs_path
+        candidate_inputs = blobs_dir / stream_inputs_path
+        if existing_inputs.exists():
+            if sha256_file(existing_inputs) != stream_inputs["sha256"]:
+                input_ids = stream_capture_archive.stream_input_case_ids(candidate_inputs)
+                replacements = {
+                    case
+                    for case in input_ids
+                    if case[1] in approved_stream_replacements
+                }
+                changes = stream_capture_archive.stream_input_changes(
+                    existing_inputs,
+                    candidate_inputs,
+                    replacements,
+                )
+                if changes is None:
+                    raise ValueError(f"stream input archive has unapproved changes: {stream_inputs_path}")
+                allowed_stream_cases, corrected_stream_cases = changes
+        else:
+            allowed_stream_cases = stream_capture_archive.stream_input_case_ids(candidate_inputs)
+    if corrected_stream_cases and manifest_path.exists():
+        prior = fixture_disposition.active_shards(json.loads(manifest_path.read_text()))
+        for shard in prior:
+            path = shard["path"]
+            if not path.startswith("toolcalling/fixtures-stream-v1/dynamo_v2-"):
+                continue
+            existing_capture = fixtures_dir / path
+            if not existing_capture.exists():
+                continue
+            capture_root = Path(path).name.removesuffix(".tar.gz")
+            affected_cases = stream_capture_archive.stream_capture_case_ids(existing_capture, capture_root)
+            corrected_for_archive = affected_cases & corrected_stream_cases
+            if corrected_for_archive:
+                if path not in new_paths:
+                    raise ValueError(f"corrected stream input requires recapturing active archive: {path}")
+                if stream_capture_receipt is None or not stream_capture_archive.validate_capture_receipt(
+                    stream_capture_receipt,
+                    blobs_dir / stream_inputs_path,
+                    blobs_dir / path,
+                    capture_root,
+                    corrected_for_archive,
+                ):
+                    raise ValueError(f"corrected stream input requires a matching capture receipt: {path}")
+    # New cases need matching input additions; result corrections need explicit case IDs.
+    # Producer metadata and non-YAML members remain immutable.
     for shard in shards:
         if shard.get("format") == "unified-history":
             continue
         destination = fixtures_dir / shard["path"]
         if re.match(r"^[a-z0-9_]+-\d", destination.name) and destination.exists():
             if sha256_file(destination) != shard["sha256"]:
-                append_only_stream = (
+                stream_update_allowed = (
                     shard["path"].startswith("toolcalling/fixtures-stream-v1/dynamo_v2-")
-                    and Path(shard["path"]).stem
-                    == f"dynamo_v2-{read_versions()[0]['dynamo-parsers-v2']}"
-                    and stream_capture_archive.stream_capture_additions_only(
+                    and stream_capture_archive.stream_capture_updates_allowed(
                         destination,
                         blobs_dir / shard["path"],
-                        Path(shard["path"]).stem,
+                        Path(shard["path"]).name.removesuffix(".tar.gz"),
+                        allowed_stream_cases,
+                        corrected_stream_cases,
                     )
                 )
-                if not append_only_stream:
+                if not stream_update_allowed:
                     raise ValueError(f"versioned capture is immutable; use a new semantic version: {shard['path']}")
     stale = [
         p
         for p in fixtures_dir.rglob("*.tar.gz")
         if str(p.relative_to(fixtures_dir)) not in new_paths | inactive.keys()
+        and not str(p.relative_to(fixtures_dir)).startswith("unified/")
     ]
     if dry_run:
         archive_shards = [shard for shard in shards if shard.get("format") != "unified-history"]
@@ -362,10 +416,6 @@ def sync_store(
         if prune:
             print(f"  removing stale {p.relative_to(fixtures_dir)}")
             p.unlink()
-            parent = p.parent
-            while parent != fixtures_dir and not any(parent.iterdir()):
-                parent.rmdir()
-                parent = parent.parent
         else:
             print(f"  keeping {p.relative_to(fixtures_dir)} (not in this package run; --prune removes)")
 
@@ -433,7 +483,18 @@ def _validate_candidate_package(manifest, fixtures_dir, history_dir):
             raise ValueError(f"candidate package shard differs from manifest: {shard['path']}")
 
 
-def package_snapshot(stamp, created_pt, crates, peers, *, dry_run, prune):
+def package_snapshot(
+    stamp,
+    created_pt,
+    crates,
+    peers,
+    *,
+    dry_run,
+    prune,
+    stream_only=False,
+    approved_stream_replacements=frozenset(),
+    stream_capture_receipt=None,
+):
     conformance_root = ROOT / "conformance"
     manifest_path = ROOT / MANIFEST_REL
     with tempfile.TemporaryDirectory(
@@ -450,17 +511,19 @@ def package_snapshot(stamp, created_pt, crates, peers, *, dry_run, prune):
 
         with unified_history._store_mutation_lock(UNIFIED_HISTORY_DIR):
             print("\nStaging fixture trees…")
-            stage_fixtures(conformance_root, loose_root)
+            trees = ["toolcalling/fixtures-stream-v1"] if stream_only else None
+            if stream_only:
+                stage_fixtures(conformance_root, loose_root, trees=trees)
+            else:
+                stage_fixtures(conformance_root, loose_root)
             shutil.copytree(FIXTURES_DIR, candidate_fixtures, copy_function=os.link)
             shutil.copytree(UNIFIED_HISTORY_DIR, candidate_history)
 
             print("\nBuilding shards…")
-            shards = build_shards(
-                loose_root,
-                blobs_dir,
-                prune,
-                history_root=candidate_history,
-            )
+            if stream_only:
+                shards = build_shards(loose_root, blobs_dir, prune, history_root=candidate_history, trees=trees)
+            else:
+                shards = build_shards(loose_root, blobs_dir, prune, history_root=candidate_history)
 
             print(f"\nStaging store candidate for: {FIXTURES_DIR}")
             sync_store(
@@ -470,6 +533,8 @@ def package_snapshot(stamp, created_pt, crates, peers, *, dry_run, prune):
                 prune,
                 fixtures_dir=candidate_fixtures,
                 manifest_path=manifest_path,
+                approved_stream_replacements=approved_stream_replacements,
+                stream_capture_receipt=stream_capture_receipt,
             )
 
             inactive_shards = list(
@@ -508,12 +573,14 @@ def package_snapshot(stamp, created_pt, crates, peers, *, dry_run, prune):
                 print(f"\n[dry-run] validated candidate manifest for: {manifest_path}")
                 return
 
+            publish_paths = [
+                (candidate_fixtures, FIXTURES_DIR),
+                (candidate_manifest, manifest_path),
+            ]
+            if not stream_only:
+                publish_paths.insert(0, (candidate_history, UNIFIED_HISTORY_DIR))
             unified_history.publish_paths_transactionally(
-                [
-                    (candidate_history, UNIFIED_HISTORY_DIR),
-                    (candidate_fixtures, FIXTURES_DIR),
-                    (candidate_manifest, manifest_path),
-                ],
+                publish_paths,
                 backup_parent=conformance_root,
             )
 
@@ -532,6 +599,20 @@ def main():
     )
     ap.add_argument("--snapshot", default=None, help="Snapshot stamp override (YYYYMMDD_HHMMSS)")
     ap.add_argument("--dry-run", action="store_true", help="Build tarballs but don't touch the store")
+    ap.add_argument("--stream-only", action="store_true", help="Package only the loose tool-calling stream tree")
+    ap.add_argument(
+        "--replace-stream-case",
+        action="append",
+        default=[],
+        metavar="CASE_ID",
+        help="Allow an approved stream input and capture correction for this full case ID",
+    )
+    ap.add_argument(
+        "--stream-capture-receipt",
+        type=Path,
+        default=None,
+        help="validate this capture receipt when packaging approved stream input corrections",
+    )
     ap.add_argument(
         "--prune",
         action="store_true",
@@ -539,6 +620,17 @@ def main():
         "Default keeps them: local capture trees are often partial.",
     )
     args = ap.parse_args()
+    if args.stream_only and args.prune:
+        ap.error("--stream-only cannot be combined with --prune")
+    if args.replace_stream_case and not args.stream_only:
+        ap.error("--replace-stream-case requires --stream-only")
+    invalid_replacements = [
+        case_id
+        for case_id in args.replace_stream_case
+        if re.fullmatch(r"TOOLCALLING\.streamv1\.\d+(?:\.[a-z])?", case_id) is None
+    ]
+    if invalid_replacements:
+        ap.error(f"invalid stream case IDs: {invalid_replacements}")
 
     try:
         from zoneinfo import ZoneInfo
@@ -562,6 +654,10 @@ def main():
     print(f"Crates:   {crates}")
     print(f"Peers:    {peers}")
 
+    receipt = None
+    if args.stream_capture_receipt is not None:
+        receipt = json.loads(args.stream_capture_receipt.read_text())
+
     package_snapshot(
         stamp,
         created_pt,
@@ -569,6 +665,9 @@ def main():
         peers,
         dry_run=args.dry_run,
         prune=args.prune,
+        stream_only=args.stream_only,
+        approved_stream_replacements=frozenset(args.replace_stream_case),
+        stream_capture_receipt=receipt,
     )
 
 

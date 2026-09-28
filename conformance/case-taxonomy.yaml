@@ -237,8 +237,8 @@ suites:
           "5.enum": {desc: "The request tool schema requires string alongside an enum containing string \"null\" and JSON null; the type excludes JSON null.", required: false}
           "4.mixed_labels": {desc: Mixed nullable label and note with a literal string field, required: false}
           "4.mixed_grep": {desc: Mixed string pattern and nullable path under a strict tool schema, required: false}
-          g: {desc: Nullable and composed scalar schemas preserve JSON scalar types, required: false}
-          h: {desc: String argument boundaries and literal null text remain exact, required: false}
+          g: {desc: 'Composed scalar schemas preserve integer, number, and boolean values', required: false}
+          h: {desc: String argument boundaries and empty values remain exact, required: false}
       "8":
         title: Narration around calls
         required: true
@@ -289,6 +289,11 @@ suites:
         required: true
         cases:
           "": {desc: Complete single tool call with a grammar token split across chunk boundaries, required: true}
+      "51":
+        title: Tool-only reasoning projection
+        required: false
+        cases:
+          a: {desc: Tool-only projection preserves caller-usable reasoning information around a tool call, required: false}
 
   reasoning.batch:
     prefix: REASONING.batch
