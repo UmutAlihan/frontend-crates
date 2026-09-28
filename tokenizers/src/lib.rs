@@ -20,7 +20,7 @@ pub use anyhow::{Error, Result};
 
 pub use basetenkenizer::BasetenTokenizer;
 pub use cache::{CacheTokenUsage, CacheTokenUsageFn, CachedTokenizer, L1CacheStats};
-pub use fastokens::FastTokenizer;
+pub use fastokens::{FastTikTokenTokenizer, FastTokenizer};
 pub use hf::HuggingFaceTokenizer;
 pub use tiktoken::TikTokenTokenizer;
 pub use traits::DecodeResult;

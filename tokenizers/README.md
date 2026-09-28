@@ -42,6 +42,13 @@ let encoding = tokenizer.encode_segments(&segments)?;
 Segmented encoding preserves legacy tiktoken chunk boundaries for long-input
 token-ID parity, as required by Kimi K3.
 
+Checkpoints that ship only a `tiktoken.model` (the Kimi K2/K3 family) do not
+need a converted `tokenizer.json` to use `fastokens`:
+`FastTikTokenTokenizer::from_file_auto("/path/to/tiktoken.model")` resolves the
+BPE regex from `config.json` and the special tokens from `tokenizer_config.json`
+exactly like `TikTokenTokenizer`, produces the same ids, and encodes and decodes
+through `fastokens`.
+
 ## Quick start
 
 ```rust
