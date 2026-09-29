@@ -368,6 +368,26 @@ def sync_store(
                     corrected_for_archive,
                 ):
                     raise ValueError(f"corrected stream input requires a matching capture receipt: {path}")
+    for shard in shards:
+        path = shard["path"]
+        if not path.startswith("toolcalling/fixtures-stream-v1/dynamo_v2-"):
+            continue
+        existing_capture = fixtures_dir / path
+        candidate_capture = blobs_dir / path
+        if not existing_capture.exists() or not candidate_capture.exists():
+            continue
+        if sha256_file(existing_capture) == shard["sha256"]:
+            continue
+        capture_root = Path(path).name.removesuffix(".tar.gz")
+        if stream_capture_archive.merge_stream_capture_additions(
+            existing_capture,
+            candidate_capture,
+            capture_root,
+            allowed_stream_cases,
+            corrected_stream_cases,
+        ):
+            shard["sha256"] = sha256_file(candidate_capture)
+            shard["size"] = candidate_capture.stat().st_size
     # New cases need matching input additions; result corrections need explicit case IDs.
     # Producer metadata and non-YAML members remain immutable.
     for shard in shards:

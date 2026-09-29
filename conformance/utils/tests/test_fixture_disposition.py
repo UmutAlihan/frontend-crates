@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -710,6 +711,7 @@ def test_sync_store_accepts_stream_capture_additions(evidence, tmp_path, version
     with tarfile.open(destination, "w:gz") as archive:
         archive.add(source, arcname=member)
     document["cases"]["TOOLCALLING.streamv1.7.g"] = {"chunks": [{"expected": []}]}
+    document["cases"]["TOOLCALLING.streamv1.8.a"] = {"chunks": [{"expected": ["uncaptured history"]}]}
     source.write_text(yaml.safe_dump(document))
     with tarfile.open(candidate, "w:gz") as archive:
         archive.add(source, arcname=member)
@@ -720,6 +722,77 @@ def test_sync_store_accepts_stream_capture_additions(evidence, tmp_path, version
 
     assert package_fixtures.sha256_file(destination) == shard["sha256"]
     assert package_fixtures.sha256_file(old_input) == input_shard["sha256"]
+    assert stream_capture_archive.stream_capture_case_ids(destination, f"dynamo_v2-{version}") == {
+        ("glm47", "TOOLCALLING.streamv1.7.a"),
+        ("glm47", "TOOLCALLING.streamv1.7.g"),
+    }
+
+
+def test_sync_store_discards_unapproved_full_recapture_rows_when_inputs_are_unchanged(evidence, tmp_path):
+    _conf, store, _manifest, manifest_path = evidence
+    version = _TEST_STREAM_CAPTURE_VERSION
+    relative = f"toolcalling/fixtures-stream-v1/dynamo_v2-{version}.tar.gz"
+    destination = store / relative
+    destination.parent.mkdir(parents=True)
+    input_relative = "toolcalling/fixtures-stream-v1/inputs.tar.gz"
+    old_input = store / input_relative
+    old_input.parent.mkdir(parents=True, exist_ok=True)
+    input_source = tmp_path / "input.yaml"
+    input_source.write_text(yaml.safe_dump({
+        "family": "glm47",
+        "mode": "streamv1",
+        "cases": {"TOOLCALLING.streamv1.7.a": {"chunks": []}},
+    }))
+    input_member = "toolcalling/fixtures-stream-v1/inputs/glm47/TOOLCALLING.streamv1.7.yaml"
+    with tarfile.open(old_input, "w:gz") as archive:
+        archive.add(input_source, arcname=input_member)
+    member = f"toolcalling/fixtures-stream-v1/dynamo_v2-{version}/glm47/TOOLCALLING.streamv1.7.yaml"
+    capture_document = {
+        "family": "glm47",
+        "mode": "streamv1",
+        "captured_with": {"dynamo_v2": version},
+        "cases": {"TOOLCALLING.streamv1.7.a": {"chunks": [{"expected": []}]}},
+    }
+    capture_source = tmp_path / "capture.yaml"
+    capture_source.write_text(yaml.safe_dump(capture_document))
+    with tarfile.open(destination, "w:gz") as archive:
+        archive.add(capture_source, arcname=member)
+    original_capture_hash = package_fixtures.sha256_file(destination)
+
+    blobs = tmp_path / "blobs"
+    candidate_capture = blobs / relative
+    candidate_capture.parent.mkdir(parents=True)
+    candidate_input = blobs / input_relative
+    candidate_input.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(old_input, candidate_input)
+    capture_document["cases"]["TOOLCALLING.streamv1.8.a"] = {"chunks": [{"expected": []}]}
+    capture_source.write_text(yaml.safe_dump(capture_document))
+    with tarfile.open(candidate_capture, "w:gz") as archive:
+        archive.add(capture_source, arcname=member)
+    input_shard = {
+        "path": input_relative,
+        "sha256": package_fixtures.sha256_file(candidate_input),
+        "size": candidate_input.stat().st_size,
+    }
+    capture_shard = {
+        "path": relative,
+        "sha256": package_fixtures.sha256_file(candidate_capture),
+        "size": candidate_capture.stat().st_size,
+    }
+
+    package_fixtures.sync_store(
+        blobs,
+        [input_shard, capture_shard],
+        dry_run=False,
+        prune=False,
+        fixtures_dir=store,
+        manifest_path=manifest_path,
+    )
+
+    assert package_fixtures.sha256_file(destination) == original_capture_hash
+    assert stream_capture_archive.stream_capture_case_ids(destination, f"dynamo_v2-{version}") == {
+        ("glm47", "TOOLCALLING.streamv1.7.a"),
+    }
 
 
 def test_sync_store_rejects_included_but_stale_capture_without_receipt(evidence, tmp_path):
@@ -980,6 +1053,26 @@ def test_stream_input_archive_allows_only_appended_cases(tmp_path):
     ) is None
 
 
+def test_stream_input_archive_rejects_duplicate_case_ids_across_documents(tmp_path):
+    path = tmp_path / "duplicate-inputs.tar.gz"
+    case_id = "TOOLCALLING.streamv1.7.g"
+    with tarfile.open(path, "w:gz") as archive:
+        for filename in ("first.yaml", "second.yaml"):
+            source = tmp_path / filename
+            source.write_text(yaml.safe_dump({
+                "family": "glm47",
+                "mode": "streamv1",
+                "cases": {case_id: {"chunks": []}},
+            }))
+            archive.add(
+                source,
+                arcname=f"toolcalling/fixtures-stream-v1/inputs/glm47/{filename}",
+            )
+
+    with pytest.raises(ValueError, match="duplicate stream archive case"):
+        stream_capture_archive.stream_input_case_ids(path)
+
+
 def test_sync_store_requires_every_affected_active_capture_for_input_correction(evidence, tmp_path):
     _conf, store, manifest, manifest_path = evidence
     input_relative = "toolcalling/fixtures-stream-v1/inputs.tar.gz"
@@ -1080,14 +1173,15 @@ def test_current_dynamo_stream_archive_allows_new_capture_document(tmp_path):
     old = tmp_path / "old.tar.gz"
     candidate = tmp_path / "candidate.tar.gz"
     source = tmp_path / "case.yaml"
+    added_source = tmp_path / "added.yaml"
     document = {"family": "glm47", "mode": "streamv1", "captured_with": {"dynamo_v2": _TEST_STREAM_CAPTURE_VERSION}, "cases": {}}
     source.write_text(yaml.safe_dump(document))
     with tarfile.open(old, "w:gz") as output:
         output.add(source, arcname=f"toolcalling/fixtures-stream-v1/{_TEST_STREAM_CAPTURE_ROOT}/glm47/case.yaml")
-    source.write_text(yaml.safe_dump({**document, "cases": {"TOOLCALLING.streamv1.7.g": {"chunks": []}}}))
+    added_source.write_text(yaml.safe_dump({**document, "cases": {"TOOLCALLING.streamv1.7.g": {"chunks": []}}}))
     with tarfile.open(candidate, "w:gz") as output:
         output.add(source, arcname=f"toolcalling/fixtures-stream-v1/{_TEST_STREAM_CAPTURE_ROOT}/glm47/case.yaml")
-        output.add(source, arcname=f"toolcalling/fixtures-stream-v1/{_TEST_STREAM_CAPTURE_ROOT}/glm47/added.yaml")
+        output.add(added_source, arcname=f"toolcalling/fixtures-stream-v1/{_TEST_STREAM_CAPTURE_ROOT}/glm47/added.yaml")
 
     allowed = {("glm47", "TOOLCALLING.streamv1.7.g")}
     assert stream_capture_archive.stream_capture_updates_allowed(old, candidate, _TEST_STREAM_CAPTURE_ROOT, allowed)
@@ -1121,6 +1215,33 @@ def test_stream_regression_append_is_idempotent_and_preserves_other_cases(tmp_pa
     }
 
 
+def test_stream_regression_append_uses_existing_family_template_when_partial_token_file_is_absent(tmp_path):
+    inputs = tmp_path / "inputs"
+    family = inputs / "minimax_m3"
+    family.mkdir(parents=True)
+    template = family / "TOOLCALLING.streamv1.7.yaml"
+    template.write_text(yaml.safe_dump({
+        "family": "minimax_m3",
+        "mode": "streamv1",
+        "model_label": "MiniMax M3",
+        "cases": {"TOOLCALLING.streamv1.7.a": {"description": "prior", "chunks": []}},
+    }))
+    case_id = "TOOLCALLING.streamv1.7-7"
+    requested = {"description": "new nullable union shape", "chunks": []}
+
+    append_stream_regression_cases._append(inputs, {"minimax_m3": requested}, case_id)
+
+    target = family / "TOOLCALLING.streamv1.7.yaml"
+    result = yaml.safe_load(target.read_text())
+    assert result["family"] == "minimax_m3"
+    assert result["mode"] == "streamv1"
+    assert result["model_label"] == "MiniMax M3"
+    assert result["cases"] == {
+        "TOOLCALLING.streamv1.7.a": {"description": "prior", "chunks": []},
+        case_id: requested,
+    }
+
+
 def test_stream_regression_append_rejects_conflicting_case_with_diff(tmp_path):
     inputs = tmp_path / "inputs"
     family = inputs / "glm47"
@@ -1143,6 +1264,45 @@ def test_stream_regression_append_rejects_conflicting_case_with_diff(tmp_path):
 
     assert "-description: existing" in str(error.value)
     assert "+description: replacement" in str(error.value)
+    assert path.read_bytes() == before
+
+
+def test_stream_regression_append_conflict_does_not_partially_write_other_cases(tmp_path, monkeypatch):
+    inputs = tmp_path / "inputs"
+    family = inputs / "glm47"
+    family.mkdir(parents=True)
+    path = family / "TOOLCALLING.streamv1.7.yaml"
+    existing = {"description": "prior string case", "chunks": []}
+    path.write_text(yaml.safe_dump({
+        "family": "glm47",
+        "mode": "streamv1",
+        "cases": {append_stream_regression_cases.STRING_CASE: existing},
+    }))
+    before = path.read_bytes()
+    monkeypatch.setattr(append_stream_regression_cases, "SCALAR_CASES", {
+        "glm47": {"description": "new scalar case", "chunks": []},
+    })
+    monkeypatch.setattr(append_stream_regression_cases, "STRING_CASES", {
+        "glm47": {"description": "conflicting string case", "chunks": []},
+    })
+    for name in (
+        "REASONING_CASES",
+        "ENTITY_CASES",
+        "NESTED_UNION_CASES",
+        "REFERENCE_TYPE_CASES",
+        "OBJECT_REFERENCE_CASES",
+        "SELECTOR_CASES",
+    ):
+        monkeypatch.setattr(append_stream_regression_cases, name, {})
+    monkeypatch.setattr(sys, "argv", [
+        "append_stream_regression_cases.py",
+        "--inputs-root",
+        str(inputs),
+    ])
+
+    with pytest.raises(ValueError, match="conflicting authored case"):
+        append_stream_regression_cases.main()
+
     assert path.read_bytes() == before
 
 

@@ -239,6 +239,10 @@ suites:
           "4.mixed_grep": {desc: Mixed string pattern and nullable path under a strict tool schema, required: false}
           g: {desc: 'Composed scalar schemas preserve integer, number, and boolean values', required: false}
           h: {desc: String argument boundaries and empty values remain exact, required: false}
+          "6": {desc: GLM preserves literal entity text in string and object argument values, required: false}
+          "7": {desc: MiniMax M3 preserves nested scalar types when an object wins a nullable union, required: false}
+          "8": {desc: GLM resolves local references and intersects sibling schema constraints, required: false}
+          "9": {desc: MiniMax M3 resolves a local object reference before coercing arguments, required: false}
       "8":
         title: Narration around calls
         required: true
@@ -294,6 +298,7 @@ suites:
         required: false
         cases:
           a: {desc: Tool-only projection preserves caller-usable reasoning information around a tool call, required: false}
+          "1": {desc: DeepSeek tool-only selection accepts both DSML dialects in one stream, required: false}
 
   reasoning.batch:
     prefix: REASONING.batch
@@ -400,3 +405,6 @@ known_gaps:
     minimax_m3: ["2.a", "2.c", "2.d", "4.a", "5.b", "5.c", "5.d", "5.e", "6.a", "6.b", "8.a", "8.b", "8.c", "8.d", "50"]
   reasoning.stream:
     minimax_m3: ["4.b", "4.c", "4.d"]
+
+retired_subcases:
+  toolcalling.stream: ["50.a"]

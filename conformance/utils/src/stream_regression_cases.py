@@ -6,6 +6,11 @@
 SCALAR_CASE = "TOOLCALLING.streamv1.7.g"
 STRING_CASE = "TOOLCALLING.streamv1.7.h"
 REASONING_CASE = "TOOLCALLING.streamv1.51.a"
+ENTITY_CASE = "TOOLCALLING.streamv1.7-6"
+NESTED_UNION_CASE = "TOOLCALLING.streamv1.7-7"
+REFERENCE_TYPE_CASE = "TOOLCALLING.streamv1.7-8"
+OBJECT_REFERENCE_CASE = "TOOLCALLING.streamv1.7-9"
+SELECTOR_CASE = "TOOLCALLING.streamv1.51-1"
 
 
 def scalar_tools():
@@ -24,6 +29,74 @@ def string_tools():
     }}}]
 
 
+def stream_case(description, reference, tools, chunks):
+    return {
+        "description": description,
+        "ref": f"https://github.com/ai-dynamo/frontend-crates/pull/{reference}",
+        "tools": tools,
+        "chunks": chunks + [finish()],
+    }
+
+
+def entity_tools():
+    return [{"name": "inspect", "parameters": {"type": "object", "properties": {
+        "text": {"type": "string"},
+        "payload": {"type": "object", "properties": {"text": {"type": "string"}}},
+    }}}]
+
+
+def nested_union_tools():
+    return [{
+        "name": "list_notes",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pagination": {"anyOf": [
+                    {"type": "object", "properties": {
+                        "page": {"type": "integer", "minimum": 1},
+                        "per_page": {"type": "integer", "minimum": 1, "maximum": 100},
+                    }},
+                    {"type": "null"},
+                ]},
+            },
+            "required": ["pagination"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    }]
+
+
+def glm_reference_tools():
+    return [{"name": "capture_payload", "parameters": {
+        "type": "object",
+        "$defs": {
+            "Text": {"type": "string"},
+            "TextAlias": {"$ref": "#/$defs/Text"},
+            "Count": {"type": "integer"},
+        },
+        "properties": {
+            "payload": {"$ref": "#/$defs/TextAlias", "allOf": [{"type": "string"}]},
+            "count": {"$ref": "#/$defs/Count", "minimum": 1},
+        },
+        "required": ["payload", "count"],
+    }}]
+
+
+def object_reference_tools():
+    return [{"name": "authenticate_first_name", "parameters": {
+        "type": "object",
+        "$defs": {"Schema": {
+            "type": "object",
+            "properties": {"input": {"type": "string"}, "notes": {"type": "string"}},
+            "required": ["input", "notes"],
+            "additionalProperties": False,
+        }},
+        "properties": {"data": {"$ref": "#/$defs/Schema"}},
+        "required": ["data"],
+        "additionalProperties": False,
+    }}]
+
+
 WEATHER_TOOLS = [{"name": "get_weather", "parameters": {
     "type": "object", "properties": {"location": {"type": "string"}},
 }}]
@@ -34,30 +107,95 @@ def finish(reason="tool_calls"):
 
 
 def scalar_case(chunks):
-    return {
-        "description": "Composed scalar schemas preserve integer, number, and boolean values",
-        "ref": "https://github.com/ai-dynamo/frontend-crates/pull/248",
-        "tools": scalar_tools(),
-        "chunks": chunks + [finish()],
-    }
+    return stream_case(
+        "Composed scalar schemas preserve integer, number, and boolean values",
+        248, scalar_tools(), chunks,
+    )
 
 
 def string_case(chunks):
-    return {
-        "description": "Family-native string arguments preserve whitespace and empty strings",
-        "ref": "https://github.com/ai-dynamo/frontend-crates/pull/247",
-        "tools": string_tools(),
-        "chunks": chunks + [finish()],
-    }
+    return stream_case(
+        "Family-native string arguments preserve whitespace and empty strings",
+        247, string_tools(), chunks,
+    )
 
 
 def reasoning_case(chunks):
-    return {
-        "description": "Tool-only projection preserves caller-usable reasoning information around a tool call",
-        "ref": "https://github.com/ai-dynamo/frontend-crates/pull/253",
-        "tools": WEATHER_TOOLS,
-        "chunks": chunks + [finish()],
-    }
+    return stream_case(
+        "Tool-only projection preserves caller-usable reasoning information around a tool call",
+        253, WEATHER_TOOLS, chunks,
+    )
+
+
+ENTITY_CASES = {
+    "glm47": stream_case(
+        "GLM argument strings and object values preserve literal XML entity text",
+        249,
+        entity_tools(),
+        [
+            {"delta_text": "<tool_call>inspect<arg_key>text</arg_key><arg_value>"},
+            {"delta_text": "&lt;tag&gt; &amp; &quot;x&quot; &apos;y&apos; &#65; &amp;lt;</arg_value><arg_key>payload</arg_key><arg_value>{"},
+            {"delta_text": '"text":"&quot; &amp;"}</arg_value></tool_call>'},
+        ],
+    ),
+}
+
+
+NESTED_UNION_CASES = {
+    "minimax_m3": stream_case(
+        "MiniMax M3 keeps nested integer values when an object wins a nullable union",
+        270,
+        nested_union_tools(),
+        [
+            {"delta_text": ']<]minimax[>[<tool_call>]<]minimax[>[<invoke name="list_notes">'},
+            {"delta_text": "]<]minimax[>[<pagination>]<]minimax[>[<page>2]<]minimax[>[</page>"},
+            {"delta_text": "]<]minimax[>[<per_page>25]<]minimax[>[</per_page>]<]minimax[>[</pagination>]<]minimax[>[</invoke>]<]minimax[>[</tool_call>"},
+        ],
+    ),
+}
+
+
+REFERENCE_TYPE_CASES = {
+    "glm47": stream_case(
+        "GLM resolves local schema references and intersects sibling constraints",
+        271,
+        glm_reference_tools(),
+        [
+            {"delta_text": "<tool_call>capture_payload<arg_key>payload</arg_key><arg_value>{"},
+            {"delta_text": '"x":1}</arg_value><arg_key>count</arg_key><arg_value>42</arg_value></tool_call>'},
+        ],
+    ),
+}
+
+
+OBJECT_REFERENCE_CASES = {
+    "minimax_m3": stream_case(
+        "MiniMax M3 resolves a local parameter reference before parsing object arguments",
+        273,
+        object_reference_tools(),
+        [
+            {"delta_text": ']<]minimax[>[<tool_call>]<]minimax[>[<invoke name="authenticate_first_name">'},
+            {"delta_text": ']<]minimax[>[<data>{"input":"Alex","notes":"first name supplied"}]<]minimax[>[</data>'},
+            {"delta_text": "]<]minimax[>[</invoke>]<]minimax[>[</tool_call>"},
+        ],
+    ),
+}
+
+
+SELECTOR_CASES = {
+    "deepseek_v4": stream_case(
+        "DeepSeek tool-only selection accepts both DSML dialects in one stream",
+        255,
+        [{"name": "inspect", "parameters": {"type": "object", "properties": {
+            "value": {"type": "string"},
+        }}}],
+        [
+            {"delta_text": '<｜DSML｜tool_calls><｜DSML｜invoke name="inspect">'},
+            {"delta_text": '<｜DSML｜parameter name="value" string="true">compact</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls><｜DSML｜ calls><｜DSML｜ invoke name="inspect">'},
+            {"delta_text": '<｜DSML｜ parameter name="value" string="true">spaced</｜DSML｜ parameter></｜DSML｜ invoke></｜DSML｜ calls>'},
+        ],
+    ),
+}
 
 
 SCALAR_CASES = {

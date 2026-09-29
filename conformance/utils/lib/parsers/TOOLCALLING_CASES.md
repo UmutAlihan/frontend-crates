@@ -343,6 +343,8 @@ The optional null-coercion variants below appear under the visible batch columns
 - **`TOOLCALLING.batch.7-5.untyped_enum`** Direct `enum: ["null"]` without a `type` still requires the literal string `"null"`.
 - **`TOOLCALLING.batch.7-4.mixed_grep`** Mixed string and nullable arguments. Constructed MiniMax M3 regression for PR #269: a `grep` tool with `strict: true` declares `pattern` as `string` and `path` as `anyOf: [string, null]`. Bare text `null` in both parameters must produce `{"pattern":"null","path":null}`.
 
+Streaming-only parser regressions for argument schemas, entities, and string boundaries are listed in `TOOLCALLING_STREAMING_V1_CASES.md` with their source PRs.
+
 ## `TOOLCALLING.batch.8` — Normal text interleaved with tool calls
 
 Model emits narration text before / after / between tool-call blocks.

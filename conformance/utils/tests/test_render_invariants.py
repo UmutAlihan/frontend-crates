@@ -32,15 +32,26 @@ if str(SRC) not in sys.path:
 from resolve_stream_fixtures import resolve, version_key  # noqa: E402
 from fixture_snapshot import fixture_snapshot_root  # noqa: E402
 import fixtures  # noqa: E402
+from case_variants import visible_null_groups  # noqa: E402
 
 FIXTURES_ROOT = fixture_snapshot_root()
 STREAM_SRC = FIXTURES_ROOT / "toolcalling" / "fixtures-stream-v1"
 
 
+def test_visible_null_issue_groups_follow_display_grouping():
+    assert visible_null_groups({"7-4.mixed_labels"}, "glm47") == {"7-4", "7-5"}
+    assert visible_null_groups({"7-4.mixed_grep"}, "minimax_m3") == {"7-4", "7-5"}
+    assert visible_null_groups({"7-4"}, "qwen3") == {"7-4"}
+    assert visible_null_groups({"7-7"}, "glm47") == {"7-7"}
+
+
 def test_stream_regression_cases_share_their_parent_case_bands():
     assert fixtures._subcase_group_key("streamv1", "7.g") == "args"
     assert fixtures._subcase_group_key("streamv1", "7.h") == "args"
+    for case_id in ("7-6", "7-7", "7-8", "7-9"):
+        assert fixtures._subcase_group_key("streamv1", case_id) == "args"
     assert fixtures._subcase_group_key("streamv1", "51.a") == "reasoning_projection"
+    assert fixtures._subcase_group_key("streamv1", "51-1") == "reasoning_projection"
     assert "50.a" not in fixtures._discover_sub_cases("streamv1", {("deepseek_v4", "50.a"): {}, ("deepseek_v4", "51.a"): {}})
 
 pytestmark = pytest.mark.skipif(
@@ -57,7 +68,7 @@ def _dynamo_version_dirs() -> list[tuple[str, Path]]:
     return out
 
 
-def test_stream_regression_inputs_keep_only_non_null_values_and_reference_prs():
+def test_stream_regression_inputs_reference_prs_without_null_output_cases():
     expected = {
         "TOOLCALLING.streamv1.7.g": (
             {"glm47", "qwen3_coder", "minimax_m2", "minimax_m3"},
@@ -70,6 +81,26 @@ def test_stream_regression_inputs_keep_only_non_null_values_and_reference_prs():
         "TOOLCALLING.streamv1.51.a": (
             {"deepseek_v4", "kimi_k3", "muse_glimmer"},
             "https://github.com/ai-dynamo/frontend-crates/pull/253",
+        ),
+        "TOOLCALLING.streamv1.7-6": (
+            {"glm47"},
+            "https://github.com/ai-dynamo/frontend-crates/pull/249",
+        ),
+        "TOOLCALLING.streamv1.7-7": (
+            {"minimax_m3"},
+            "https://github.com/ai-dynamo/frontend-crates/pull/270",
+        ),
+        "TOOLCALLING.streamv1.7-8": (
+            {"glm47"},
+            "https://github.com/ai-dynamo/frontend-crates/pull/271",
+        ),
+        "TOOLCALLING.streamv1.7-9": (
+            {"minimax_m3"},
+            "https://github.com/ai-dynamo/frontend-crates/pull/273",
+        ),
+        "TOOLCALLING.streamv1.51-1": (
+            {"deepseek_v4"},
+            "https://github.com/ai-dynamo/frontend-crates/pull/255",
         ),
     }
     found = {case_id: {} for case_id in expected}
@@ -84,15 +115,13 @@ def test_stream_regression_inputs_keep_only_non_null_values_and_reference_prs():
         assert set(found[case_id]) == families
         for case in found[case_id].values():
             assert case["ref"] == reference
-            pending = [case]
-            while pending:
-                value = pending.pop()
-                if isinstance(value, dict):
-                    pending.extend(value.values())
-                elif isinstance(value, list):
-                    pending.extend(value)
-                else:
-                    assert value is not None and value != "null", (case_id, value)
+            assert all("null" not in chunk.get("delta_text", "") for chunk in case["chunks"]), case_id
+
+    nested_union = found["TOOLCALLING.streamv1.7-7"]["minimax_m3"]
+    pagination = nested_union["tools"][0]["parameters"]["properties"]["pagination"]
+    assert pagination["anyOf"][-1] == {"type": "null"}
+    assert nested_union["tools"][0]["strict"] is True
+    assert "null" not in "".join(chunk["delta_text"] for chunk in nested_union["chunks"])
 
     scalar_case = found["TOOLCALLING.streamv1.7.g"]["glm47"]
     scalar_properties = scalar_case["tools"][0]["parameters"]["properties"]

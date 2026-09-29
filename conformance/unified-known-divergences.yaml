@@ -31,6 +31,10 @@ glm47:
     golden:
       note: The GLM parser stringifies all three null-looking fields in the mixed request; PR #287 records the JSON-null behavior targeted by Michael Feil's PR #268.
       actual: 'tool_call(set_labels, {"label":"null","note":"null","literal":"null"})'
+  UNIFIED.glm47_reference_type_intersection.glm47:
+    golden:
+      note: GLM emits the referenced integer as a string when a sibling minimum constraint is present; this is the case targeted by Michael Feil's PR #271.
+      actual: 'tool_call(capture_payload, {"payload":"{\"x\":1}","count":"42"})'
 
 muse_glimmer:
   UNIFIED.deepseek_v41_mixed_control_text_in_string.muse_glimmer:

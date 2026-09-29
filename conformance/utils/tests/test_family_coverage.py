@@ -62,12 +62,19 @@ def test_lint_green_on_committed_corpus() -> None:
     assert report.failures == []
 
 
-def test_retired_stream_id_requires_explicit_declaration() -> None:
+def test_retired_stream_id_requires_explicit_declaration(tmp_path) -> None:
     taxonomy = _taxonomy()
     taxonomy["retired_subcases"] = {}
     report = cfc.Report()
+    family_dir = tmp_path / "toolcalling/fixtures-stream-v1/inputs/deepseek_v4"
+    family_dir.mkdir(parents=True)
+    (family_dir / "TOOLCALLING.streamv1.50.yaml").write_text(yaml.safe_dump({
+        "family": "deepseek_v4",
+        "mode": "streamv1",
+        "cases": {"TOOLCALLING.streamv1.50.a": {"chunks": []}},
+    }))
 
-    cfc.check_suite(report, taxonomy, _ensure_fixtures(), "toolcalling.stream", "deepseek_v4", set())
+    cfc.check_suite(report, taxonomy, tmp_path, "toolcalling.stream", "deepseek_v4", set())
 
     assert any("TOOLCALLING.streamv1.50.a is not in the taxonomy" in failure for failure in report.failures)
 

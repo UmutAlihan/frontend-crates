@@ -47,6 +47,8 @@ UNIFIED_TAX = {
     "deepseek_v41_mixed_control_text_in_string": (7, "3"),
     **{scenario: (7, label.split("-", 1)[1]) for scenario, label, *_ in NULL_VARIANTS},
     "arg_null_mixed_labels": (7, "4.mixed_labels"),
+    "deepseek_v41_json_invocation_body": (7, "6"),
+    "glm47_reference_type_intersection": (7, "7"),
     # Group 8 — Content / narration position (streamv1.8)
     "text_before_tool": (8, "1"), "trailing_text_after_tool": (8, "2"),
     "text_sandwich": (8, "3"), "text_between_calls": (8, "4"),

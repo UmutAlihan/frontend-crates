@@ -302,6 +302,10 @@ BATCH_SUB_CASE_GROUPS = [
             "7-5",
             "7.g",
             "7.h",
+            "7-6",
+            "7-7",
+            "7-8",
+            "7-9",
         ),
     ),
     ("Text interleaving", ("8.a", "8.b", "8.c", "8.d")),
@@ -329,7 +333,7 @@ SPLIT_PARENT_SUBCASES = {
 # fill in over time. Streaming-only cases with no batch analog use the >=50 band.
 STREAM_SUB_CASE_GROUPS = BATCH_SUB_CASE_GROUPS + [
     ("Partial-token", ("50",)),
-    ("Reasoning projection", ("51.a",)),
+    ("Reasoning projection", ("51.a", "51-1")),
 ]
 
 SUB_CASE_GROUPS_BY_MODE = {

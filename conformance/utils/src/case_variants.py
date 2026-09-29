@@ -57,6 +57,20 @@ def leaf_cells(row):
     return leaves
 
 
+def visible_null_groups(labels, family):
+    """Map null probe labels to the issue groups shown in the report."""
+    groups = set()
+    for label in labels:
+        parent = null_group(label)
+        if parent is None:
+            groups.add(label.split(".", 1)[0])
+            continue
+        groups.add(parent)
+        if label in MIXED_CASE_FAMILIES and family in MIXED_CASE_FAMILIES[label]:
+            groups.add("7-5")
+    return groups
+
+
 def group_null_variants(tab: dict) -> None:
     if tab["id"] not in {"tab-unified", "tab-toolcalling-streamv1", "tab-toolcalling-batch"}:
         return

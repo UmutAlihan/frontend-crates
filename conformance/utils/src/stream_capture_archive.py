@@ -2,9 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Validate safe additions and explicitly approved corrections to stream archives."""
 
+import copy
 import hashlib
+import io
 import json
+import os
+import shutil
 import tarfile
+import tempfile
 from pathlib import Path, PurePosixPath
 
 import yaml
@@ -21,6 +26,7 @@ def _documents(path: Path, root: PurePosixPath, *, capture_version: str | None) 
     found = {}
     preserved = {}
     members = set()
+    case_ids = set()
     with tarfile.open(path, "r:gz") as archive:
         for member in archive.getmembers():
             member_path = PurePosixPath(member.name)
@@ -53,6 +59,11 @@ def _documents(path: Path, root: PurePosixPath, *, capture_version: str | None) 
                     or (capture_version is None and "captured_with" in document)
                 ):
                     raise ValueError(f"invalid stream archive document: {member.name}")
+                for case_id in document["cases"]:
+                    ident = (document["family"], case_id)
+                    if ident in case_ids:
+                        raise ValueError(f"duplicate stream archive case: {ident}")
+                    case_ids.add(ident)
                 found[str(relative)] = document
             else:
                 preserved[str(relative)] = hashlib.sha256(payload).hexdigest()
@@ -217,3 +228,97 @@ def stream_capture_updates_allowed(
     new_docs, new_members = _documents(candidate, root, capture_version=capture_version)
     changes = _approved_case_additions(old_docs, new_docs, old_members, new_members, allowed_case_replacements)
     return changes is not None and changes[0] <= allowed_case_additions
+
+
+def merge_stream_capture_additions(
+    existing: Path,
+    candidate: Path,
+    capture_root: str,
+    allowed_case_additions: set[tuple[str, str]],
+    allowed_case_replacements: set[tuple[str, str]] | frozenset[tuple[str, str]] = frozenset(),
+) -> bool:
+    """Merge approved rows from a full recapture into the sparse archived version."""
+    root = PurePosixPath("toolcalling/fixtures-stream-v1") / capture_root
+    if capture_root != root.name or not capture_root.startswith("dynamo_v2-"):
+        raise ValueError(f"invalid stream capture root: {capture_root}")
+    capture_version = capture_root.removeprefix("dynamo_v2-")
+    old_docs, old_members = _documents(existing, root, capture_version=capture_version)
+    new_docs, new_members = _documents(candidate, root, capture_version=capture_version)
+    changes = _approved_case_additions(old_docs, new_docs, old_members, new_members, allowed_case_replacements)
+    if changes is None:
+        return False
+
+    old_cases = {
+        (document["family"], case_id)
+        for document in old_docs.values()
+        for case_id in document["cases"]
+    }
+    new_case_locations = {}
+    for relative, document in new_docs.items():
+        for case_id, case in document["cases"].items():
+            ident = (document["family"], case_id)
+            if ident in new_case_locations:
+                return False
+            new_case_locations[ident] = (relative, document, case)
+
+    missing_additions = allowed_case_additions - old_cases - new_case_locations.keys()
+    if missing_additions:
+        return False
+
+    additions, replacements = changes
+    selected = (additions & allowed_case_additions) | replacements
+    if not selected:
+        shutil.copyfile(existing, candidate)
+        return True
+    merged_docs = copy.deepcopy(old_docs)
+    changed_docs = set()
+    for family, case_id in selected:
+        relative, source_doc, case = new_case_locations[(family, case_id)]
+        destination_doc = merged_docs.get(relative)
+        if destination_doc is None:
+            destination_doc = {key: value for key, value in source_doc.items() if key != "cases"}
+            destination_doc["cases"] = {}
+            merged_docs[relative] = destination_doc
+        elif {key: value for key, value in destination_doc.items() if key != "cases"} != {
+            key: value for key, value in source_doc.items() if key != "cases"
+        }:
+            return False
+        destination_doc["cases"][case_id] = copy.deepcopy(case)
+        changed_docs.add(relative)
+
+    updated_payloads = {
+        str(root / relative): yaml.safe_dump(
+            merged_docs[relative], sort_keys=False, allow_unicode=True, width=4096
+        ).encode("utf-8")
+        for relative in changed_docs
+    }
+    old_names = {str(root / relative) for relative in old_docs}
+    new_names = {str(root / relative) for relative in merged_docs} - old_names
+    with tarfile.open(candidate, "r:gz") as new_archive:
+        candidate_members = {member.name: member for member in new_archive.getmembers()}
+        for name in new_names:
+            if name not in candidate_members or not candidate_members[name].isfile():
+                return False
+    temporary_fd, temporary_name = tempfile.mkstemp(prefix=f"{candidate.name}.", dir=candidate.parent)
+    os.close(temporary_fd)
+    try:
+        with tarfile.open(existing, "r:gz") as old_archive, tarfile.open(temporary_name, "w:gz") as output:
+            for member in old_archive.getmembers():
+                payload = None
+                if member.isfile():
+                    with old_archive.extractfile(member) as source:
+                        payload = source.read()
+                info = copy.copy(member)
+                if member.name in updated_payloads:
+                    payload = updated_payloads[member.name]
+                    info.size = len(payload)
+                output.addfile(info, io.BytesIO(payload) if info.isfile() else None)
+            for name in sorted(new_names):
+                info = copy.copy(candidate_members[name])
+                payload = updated_payloads[name]
+                info.size = len(payload)
+                output.addfile(info, io.BytesIO(payload))
+        os.replace(temporary_name, candidate)
+    finally:
+        Path(temporary_name).unlink(missing_ok=True)
+    return True

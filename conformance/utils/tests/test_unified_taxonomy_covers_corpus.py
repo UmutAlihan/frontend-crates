@@ -646,23 +646,23 @@ def test_unified_case_counts_match_the_generator():
     for fam in FAMILIES:
         family_specific = {
             "deepseek_v4": 93,
-            "deepseek_v41": 93,
+            "deepseek_v41": 94,
             "gemma4": 95,
-            "glm47": 94,
+            "glm47": 95,
             "kimi_k2": 93,
             "kimi_k3": 101,
             "muse_glimmer": 94,
             "qwen3": 93,
         }[fam]
         assert per_family[fam] == family_specific, f"{fam} diverged from the expected case count"
-    assert sum(per_family.values()) == 756
+    assert sum(per_family.values()) == 758
 
 
 def test_deferred_case_ids_are_not_in_the_active_taxonomy():
     deferred = {"1-2", "5-4", "5-5", "6-2", "30-14", "32-6", "50-1", "50-2"} | {
         f"31-{number}" for number in range(31, 41)
     }
-    assert len(UNIFIED_TAX) == 106
+    assert len(UNIFIED_TAX) == 108
     assert not {f"UNIFIED.{case_id}" for case_id in deferred} & {
         numbered_id(scenario) for scenario in UNIFIED_TAX
     }
@@ -1003,6 +1003,12 @@ def _native_input_calls(family, raw):
             pattern = rf'<｜DSML｜{gap}parameter name="([^"]+)" string="(true|false)">(.*?)</｜DSML｜{gap}parameter>'
             for key, is_string, value in re.findall(pattern, body, re.S):
                 arguments[key] = value if is_string == "true" else json.loads(value)
+            if family == "deepseek_v41" and not arguments:
+                payload = body.lstrip()
+                if payload.startswith("{"):
+                    value, _ = json.JSONDecoder().raw_decode(payload)
+                    if isinstance(value, dict):
+                        arguments = value
         elif family == "qwen3":
             # The generator frames values with one newline; payload whitespace is data.
             arguments = {key: value.removeprefix("\n").removesuffix("\n")
@@ -1058,11 +1064,17 @@ def _assert_input_carries_events(family, scenario, case):
                 )
                 if tool_schema is None:
                     continue
-                properties = tool_schema.get("parameters", {}).get("properties", {})
+                parameters = tool_schema.get("parameters", {})
+                properties = parameters.get("properties", {})
                 for key, value in candidate["arguments"].items():
                     schema = properties.get(key, {})
-                    if value == "null" and family in {"qwen3", "glm47"} and matches_schema(None, schema):
-                        candidate["arguments"][key] = None
+                    if isinstance(value, str):
+                        try:
+                            decoded = json.loads(value)
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(decoded, str) and matches_schema(decoded, schema, parameters):
+                            candidate["arguments"][key] = decoded
         else:
             candidates = []
             for value in _json_values(raw):
