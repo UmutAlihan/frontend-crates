@@ -18,7 +18,7 @@ def matches_schema(value, schema, root=None):
         siblings = {key: item for key, item in schema.items() if key != "$ref"}
         return matches_schema(value, target, root) and matches_schema(value, siblings, root)
 
-    assert schema.keys() <= {"type", "properties", "items", "anyOf", "oneOf", "allOf", "const",
+    assert schema.keys() <= {"type", "properties", "required", "items", "anyOf", "oneOf", "allOf", "const",
                              "enum", "nullable", "minLength", "minimum", "$defs"}, schema
     kind = schema.get("type")
     kinds = kind if isinstance(kind, list) else [kind] if kind else []
@@ -49,6 +49,8 @@ def matches_schema(value, schema, root=None):
         return False
     if isinstance(value, dict):
         properties = schema.get("properties", {})
+        if not all(key in value for key in schema.get("required", [])):
+            return False
         return all(matches_schema(item, properties[key], root) for key, item in value.items() if key in properties)
     if isinstance(value, list) and "items" in schema:
         return all(matches_schema(item, schema["items"], root) for item in value)
