@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Model-family multimodal preprocessing for LLM inference serving — a
-//! Rust replacement for the image pipelines behind HF `AutoProcessor`.
+//! Shared multimodal input processing and accounting for LLM inference
+//! serving. Model-family image pipelines reproduce HF `AutoProcessor`.
 //!
 //! Model families implement [`processor::MmFamilyProcessor`] (decoded media →
 //! named tensors, prompt geometry as data, position encodings, pixel-free
@@ -11,8 +11,8 @@
 //! over pre-resolved. The crate also carries what routers and engines must
 //! agree on: token accounting and content-hash identity
 //! ([`content_hash_bytes`], [`content_hash_canonical_image`]). The
-//! feature-gated `fetch` module is an optional trusted-source compatibility
-//! helper. Request orchestration — concurrency, caps, URL security policy,
+//! feature-gated `fetch` module exposes signatures only and currently returns
+//! [`MmError::Unsupported`]. Request orchestration — concurrency, caps, URL security policy,
 //! failure policy, packing — stays in the consumer's driver, as on the Python
 //! path; the README maps the boundary.
 //!
