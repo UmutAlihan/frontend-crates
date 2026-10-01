@@ -6771,8 +6771,9 @@ cases:
     description: 'PR #250: DeepSeek V4.1 accepts a JSON object as the invocation body and preserves marker-looking text inside its string values.'
     policy:
     - I7
-    display_id: UNIFIED.7-6
-    historical_ids: []
+    display_id: UNIFIED.deepseek-1
+    historical_ids:
+    - UNIFIED.7-6
     request:
       input: '<｜DSML｜ calls>
 

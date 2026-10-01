@@ -47,8 +47,8 @@ UNIFIED_TAX = {
     "deepseek_v41_mixed_control_text_in_string": (7, "3"),
     **{scenario: (7, label.split("-", 1)[1]) for scenario, label, *_ in NULL_VARIANTS},
     "arg_null_mixed_labels": (7, "4.mixed_labels"),
-    "deepseek_v41_json_invocation_body": (7, "6"),
-    "glm47_reference_type_intersection": (7, "7"),
+    "deepseek_v41_json_invocation_body": ("deepseek", "1"),
+    "glm47_reference_type_intersection": ("glm5", "2"),
     # Group 8 — Content / narration position (streamv1.8)
     "text_before_tool": (8, "1"), "trailing_text_after_tool": (8, "2"),
     "text_sandwich": (8, "3"), "text_between_calls": (8, "4"),
@@ -157,7 +157,8 @@ UNIFIED_GROUP_LABEL = {
     40: "Prefilled Reasoning", 41: "Prefilled Reasoning — malformed",
     50: "Prefilled Response", 51: "Prefilled Response — malformed",
     "gemma": "Gemma 4 guided call-prefix boundaries",
-    "glm5": "GLM 5 argument-marker boundaries",
+    "glm5": "GLM argument handling",
+    "deepseek": "DeepSeek V4.1 DSML invocation bodies",
     "kimi": "Kimi K3 XTML",
     "muse": "Muse-specific",
 }
@@ -198,6 +199,8 @@ def numbered_id(scenario):
 # read-side bridge from their former labels to the scenario-owned current label.
 # Current inputs and goldens use ``numbered_id`` and never write these aliases.
 LEGACY_CASE_LABELS = {
+    "7-6": "deepseek_v41_json_invocation_body",
+    "7-7": "glm47_reference_type_intersection",
     "1.a": "tool_only",
     "2.a": "two_calls", "2.b": "two_calls_same_name",
     "3.a": "text_only",

@@ -335,13 +335,7 @@ splits along four type-handling axes:
   literals above `f64`'s exact integer range must preserve the original
   value rather than round through float parsing.
 
-The optional null-coercion variants below appear under the visible batch columns `7-4` and `7-5`. Each variant keeps its own fixture ID, input, and recorded result; the mixed-field probe is referenced under both columns.
-
-- **`TOOLCALLING.batch.7-4`** The request tool schema permits JSON null. Bare parameter text `null` becomes JSON `null`. Variants cover a nullable type array (base), `.anyof`, `.oneof`, `.nullable`, and an anyOf const-null branch (`.const`).
-- **`TOOLCALLING.batch.7-5`** The request tool schema excludes JSON null for the tested value, so bare parameter text `null` remains string `"null"`. Variants cover a string type (base), a non-nullable `.union`, intersecting `.sibling_anyof` and `.sibling_oneof` constraints, `.untyped_branch`, an anyOf string-const branch (`.const`), and a typed `.enum`.
-- **`TOOLCALLING.batch.7-5.untyped_const`** Direct `const: "null"` without a `type` still requires the literal string `"null"`.
-- **`TOOLCALLING.batch.7-5.untyped_enum`** Direct `enum: ["null"]` without a `type` still requires the literal string `"null"`.
-- **`TOOLCALLING.batch.7-4.mixed_grep`** Mixed string and nullable arguments. Constructed MiniMax M3 regression for PR #269: a `grep` tool with `strict: true` declares `pattern` as `string` and `path` as `anyOf: [string, null]`. Bare text `null` in both parameters must produce `{"pattern":"null","path":null}`.
+Null coercion probes remain in the capture archive and are displayed only in Unified (`UNIFIED.7-4` and `UNIFIED.7-5`). The legacy batch and stream matrices omit those columns.
 
 Streaming-only parser regressions for argument schemas, entities, and string boundaries are listed in `TOOLCALLING_STREAMING_V1_CASES.md` with their source PRs.
 
@@ -446,7 +440,7 @@ not present in the request's supplied `tools` list.
   of range for grammars that reference tools by ordinal instead of
   name.
 
-New sub-cases use numeric suffixes (`13-1`, `13-2`, ...) rather than letters. Existing lettered IDs remain historical identifiers.
+Follow the existing dot-letter convention for legacy Tool Calling sub-cases. Unified case numbering is separate; see `conformance/README.md` for the suite-specific rules.
 
 ## `TOOLCALLING.batch.30` — Separator characters inside argument strings
 

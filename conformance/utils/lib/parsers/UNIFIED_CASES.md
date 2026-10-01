@@ -92,8 +92,6 @@ New case IDs always use a numeric suffix: `<num>-<num>` for numeric groups or `<
 - **`7-3`** (`deepseek_v41_mixed_control_text_in_string`) All eight families use their native string encoding to carry mixed reasoning and tool delimiters, entity text, quotes, a backslash, a newline, and surrounding spaces. The decoded string must survive exactly. This extends `7-2` beyond a single closer; the internal scenario name and original DeepSeek V4.1 input remain unchanged for capture history.
 - **`7-4`** (`arg_json_null`) The request tool schema permits JSON null. Bare parameter text `null` must produce JSON `null`; grammars with explicit types use native null syntax. Variants cover nullable type arrays, anyOf, oneOf, nullable, and const. Mixed-field probes also assert that non-nullable fields remain strings. Refs #251, #268, #269. Each schema variant has a distinct fixture ID; the popup lists every applicable result. The two categories reference the same mixed-field captures.
 - **`7-5`** (`arg_string_null`) The request tool schema requires a string for the tested value. Bare parameter text `null` must remain JSON string `"null"`; grammars with explicit types use native string syntax. Variants cover non-nullable unions and intersecting sibling constraints. Mixed-field probes also assert that nullable fields become null. Refs #251, #268, #269. Each schema variant has a distinct fixture ID; the popup lists every applicable result. The two categories reference the same mixed-field captures.
-- **`7-6`** (`deepseek_v41_json_invocation_body`) DeepSeek V4.1 accepts a JSON object as the invocation body and preserves marker-looking text inside string values. Regression for frontend-crates #250.
-- **`7-7`** (`glm47_reference_type_intersection`) GLM resolves local references and intersects sibling constraints when selecting argument types. Regression for frontend-crates #271.
 
 ### Group 8 — TC Content / narration position (TOOLCALLING.streamv1.8)
 - **`8-1`** (`text_before_tool`) Visible narration precedes the call. This is also covered in: TOOLCALLING.streamv1.8.a.
@@ -130,7 +128,7 @@ New case IDs always use a numeric suffix: `<num>-<num>` for numeric groups or `<
 ### DeepSeek V4.1 applicability
 - DeepSeek V4.1 uses the ordered Unified contract for native DSML calls, reasoning interleaving, guided JSON, and prefilled states. The current corpus emits 94 of the 108 taxonomy cases for this family.
 - Every taxonomy scenario declared for DeepSeek V4.1 is generated. The applicable cases include `30-13`; the Guided Decoding groups `31-1` through `35-2` except `muse-1`; the marker-discriminating Response row `50-4`; and `40-1` through `40-4` plus `41-1` through `41-2`. The native prefilled cases `40-1`, `40-3`, and `40-4` retain explicit inputs and outputs even though other DSv4.1 rows exercise the same transitions.
-- The 14 omitted cases are `kimi-1` through `kimi-8`, which require Kimi K3 XTML syntax; `gemma-1` through `gemma-2`, which require Gemma 4 guided call-prefix syntax; `glm5-1` and `7-7`, which require GLM-specific grammars; `7-4.mixed_labels`, which reproduces GLM's mixed nullable fields; and `muse-1`, whose non-Muse variant duplicates `35-1`. The `muse-1` duplicate does not imply that quoted or malformed model output cannot occur.
+- The 14 omitted cases are `kimi-1` through `kimi-8`, which require Kimi K3 XTML syntax; `gemma-1` through `gemma-2`, which require Gemma 4 guided call-prefix syntax; `glm5-1` and `glm5-2`, which require GLM-specific grammars; `7-4.mixed_labels`, which reproduces GLM's mixed nullable fields; and `muse-1`, whose non-Muse variant duplicates `35-1`. The `muse-1` duplicate does not imply that quoted or malformed model output cannot occur.
 - `30-13` retains the historical bare header with no tool name. `34-1` uses an unfinished DSML invoke header inside reasoning rather than a completed calls-block opener. Marker-free prefilled-Response rows are omitted because their default-state siblings already cover native and guided valid, multi-call, truncated, and malformed inputs; `50-4` proves that Response treats reasoning markers as visible text.
 
 <!-- TODO: Restore the 14 cases deferred from PR #232 in the deferred-conformance-cases follow-up: 1-2, 30-14, 31-31 through 31-40, and 50-1/2. Preserve their historical IDs. -->
@@ -327,9 +325,15 @@ The marker-free prefilled-Response variants were removed because they emitted th
 
 - **`gemma-1`** and **`gemma-2`** cover Gemma 4 guided call-prefix boundaries.
 
-### GLM 5-specific
+### GLM-specific
 
 - **`glm5-1`** (`glm47_parameterless_call_shape_inside_argument`) places an offered parameterless-call shape inside an open GLM argument value. The embedded close/open markers remain argument data and must not dispatch a second call.
+
+- **`glm5-2`** (`glm47_reference_type_intersection`) GLM local reference chains preserve a JSON-looking string and coerce an integer argument. This targets frontend-crates #271 with GLM-native argument syntax; it does not distinguish sibling type intersections. Other families are outside this targeted regression, rather than declared incapable of resolving references.
+
+### DeepSeek V4.1-specific
+
+- **`deepseek-1`** (`deepseek_v41_json_invocation_body`) A native DSML invoke body is a JSON object, with marker-looking string content, nested values, and a second call. Regression for frontend-crates #250. This encoding is specific to DeepSeek V4.1; the shared string-fidelity cases remain in group 7.
 
 ### Kimi-specific
 

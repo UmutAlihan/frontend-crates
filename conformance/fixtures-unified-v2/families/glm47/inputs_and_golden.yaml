@@ -6685,11 +6685,12 @@ cases:
   glm47_reference_type_intersection:
     lifecycle: active
     scenario: glm47_reference_type_intersection
-    description: 'PR #271: GLM resolves local reference chains and intersects sibling constraints when selecting argument types.'
+    description: 'PR #271: GLM resolves local reference chains before coercing string and integer arguments. This case does not distinguish sibling type intersections.'
     policy:
     - I7
-    display_id: UNIFIED.7-7
-    historical_ids: []
+    display_id: UNIFIED.glm5-2
+    historical_ids:
+    - UNIFIED.7-7
     request:
       input: <tool_call>capture_payload<arg_key>payload</arg_key><arg_value>{"x":1}</arg_value><arg_key>count</arg_key><arg_value>42</arg_value></tool_call>
       init:

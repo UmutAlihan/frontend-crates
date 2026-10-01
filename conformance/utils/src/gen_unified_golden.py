@@ -1988,7 +1988,7 @@ _GLM_REFERENCE_TOOLS = [{"name": "capture_payload", "parameters": {
 }}]
 EDGE.append((
     "glm47_reference_type_intersection",
-    "PR #271: GLM resolves local reference chains and intersects sibling constraints when selecting argument types.",
+    "PR #271: GLM resolves local reference chains before coercing string and integer arguments. This case does not distinguish sibling type intersections.",
     ["I7"],
     [{"kind": "tool_call", "name": "capture_payload", "arguments": {
         "payload": '{"x":1}', "count": 42,

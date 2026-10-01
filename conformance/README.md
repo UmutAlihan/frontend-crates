@@ -213,7 +213,7 @@ A parser change that alters output fails CI until the fixtures are re-captured a
 
 ### 5. Add a new test case (e.g. a new `TOOLCALLING.streamv1.5.h`)
 
-A "case" is one numeric-suffix sub-case shared across families. New case IDs use `<num>-<num>` or `<letters/num>-<num>`; do not allocate new letter suffixes because a long-running taxonomy can exhaust `a` through `z`. Adding one is FOUR edits, in order:
+A "case" is one sub-case shared across its applicable families. Match the suite's existing labels: legacy Tool Calling groups use dot-letter suffixes such as `7.g` and `51.a`; Unified uses numeric suffixes such as `7-1` and family-specific labels such as `glm5-2`. A recorded case ID keeps its original meaning; display aliases may organize it without rewriting captures. Adding one is FOUR edits, in order:
 
 1. **Input.** Add the case to `toolcalling/fixtures-stream-v1/inputs/<family>/TOOLCALLING.streamv1.<N>.yaml` for each family it applies to — the shared per-chunk `delta_text` (schema in [`toolcalling/fixtures-stream-v1/README.md`](toolcalling/fixtures-stream-v1/README.md#fixture-schema)). Batch cases go under `toolcalling/fixtures-batch-v1/inputs/<family>/` instead.
 2. **Description.** Add a bullet to `utils/lib/parsers/TOOLCALLING_STREAMING_V1_CASES.md` (or the batch/reasoning CASES.md) — the HTML "Case descriptions" section renders it, and the tooltip links to it.

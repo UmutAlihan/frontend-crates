@@ -42,10 +42,15 @@ def capture_layer_sort_key(label: str) -> tuple[str, int]:
 
 
 def canonical_toolcalling_case_key(case_id: str) -> str:
-    """Align displayed null cases without rewriting immutable stream archives."""
+    """Align display IDs without rewriting immutable stream archives."""
     return {
         "TOOLCALLING.streamv1.7-1": "TOOLCALLING.streamv1.7-5",
         "TOOLCALLING.streamv1.7-2": "TOOLCALLING.streamv1.7-4",
+        "TOOLCALLING.streamv1.7-6": "TOOLCALLING.streamv1.7.i",
+        "TOOLCALLING.streamv1.7-7": "TOOLCALLING.streamv1.7.j",
+        "TOOLCALLING.streamv1.7-8": "TOOLCALLING.streamv1.7.k",
+        "TOOLCALLING.streamv1.7-9": "TOOLCALLING.streamv1.7.l",
+        "TOOLCALLING.streamv1.51-1": "TOOLCALLING.streamv1.51.b",
     }.get(case_id, case_id)
 
 

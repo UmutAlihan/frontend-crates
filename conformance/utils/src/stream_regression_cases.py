@@ -3,6 +3,7 @@
 """Family-native stream-v1 fixtures for shared parser regression invariants."""
 
 
+# These capture IDs are immutable; fixture_disposition owns their display aliases.
 SCALAR_CASE = "TOOLCALLING.streamv1.7.g"
 STRING_CASE = "TOOLCALLING.streamv1.7.h"
 REASONING_CASE = "TOOLCALLING.streamv1.51.a"

@@ -298,14 +298,12 @@ BATCH_SUB_CASE_GROUPS = [
             "7.d",
             "7.e",
             "7.f",
-            "7-4",
-            "7-5",
             "7.g",
             "7.h",
-            "7-6",
-            "7-7",
-            "7-8",
-            "7-9",
+            "7.i",
+            "7.j",
+            "7.k",
+            "7.l",
         ),
     ),
     ("Text interleaving", ("8.a", "8.b", "8.c", "8.d")),
@@ -333,7 +331,7 @@ SPLIT_PARENT_SUBCASES = {
 # fill in over time. Streaming-only cases with no batch analog use the >=50 band.
 STREAM_SUB_CASE_GROUPS = BATCH_SUB_CASE_GROUPS + [
     ("Partial-token", ("50",)),
-    ("Reasoning projection", ("51.a", "51-1")),
+    ("Reasoning projection", ("51.a", "51.b")),
 ]
 
 SUB_CASE_GROUPS_BY_MODE = {
@@ -409,8 +407,11 @@ def _discover_sub_cases(mode: str, cases: dict) -> list[str]:
     taxonomy = yaml.safe_load((REPO_ROOT / "case-taxonomy.yaml").read_text())
     suite = "toolcalling.stream" if mode == "streamv1" else "toolcalling.batch"
     retired = set((taxonomy.get("retired_subcases") or {}).get(suite, []))
+    hidden_groups = set((taxonomy.get("hidden_subcase_groups") or {}).get(suite, []))
     return sorted(
-        {sub for _fam, sub in cases.keys() if sub not in retired}, key=lambda s: _sub_sort_key(mode, s)
+        {sub for _fam, sub in cases.keys()
+         if sub not in retired and null_group(sub) not in hidden_groups},
+        key=lambda s: _sub_sort_key(mode, s),
     )
 
 
@@ -535,6 +536,7 @@ def load_all_cases(
     cases: dict[tuple[str, str], dict] = {}
     labels: dict[str, str] = {}
     captured_with: dict[str, str] = {}
+    taxonomy = None
     script_dir = Path(__file__).resolve().parent
     for fp, doc in _iter_mode_docs(mode, docs):
         if doc.get("mode") != mode:
@@ -545,10 +547,18 @@ def load_all_cases(
             labels.setdefault(family, doc["model_label"])
         for impl, ver in (doc.get("captured_with") or {}).items():
             captured_with.setdefault(_canonical_impl_key(str(impl)), str(ver))
-        for cid, case in doc["cases"].items():
-            cid = canonical_toolcalling_case_key(cid)
+        for recorded_id, case in doc["cases"].items():
+            cid = canonical_toolcalling_case_key(recorded_id)
             case["__family"] = family
             sub = cid.replace(f"TOOLCALLING.{mode}.", "")
+            if cid != recorded_id and "." in sub and null_group(sub) is None:
+                # Archived prose stays immutable; aliased cases use the current
+                # taxonomy claim so popups cannot retain an obsolete assertion.
+                if taxonomy is None:
+                    taxonomy = yaml.safe_load((REPO_ROOT / "case-taxonomy.yaml").read_text())
+                suite = "toolcalling.stream" if mode == "streamv1" else "toolcalling.batch"
+                group, suffix = sub.split(".", 1)
+                case["description"] = taxonomy["suites"][suite]["groups"][group]["cases"][suffix]["desc"]
             case["__fixture_path"] = rel
             case["__case_id"] = cid
             # Stream fixtures use the per-chunk format: each chunk carries
