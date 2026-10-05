@@ -90,10 +90,11 @@ fn next_scan_start(text: &str, marker_len: usize) -> usize {
 /// Close selection for `string="true"` parameter values.
 ///
 /// The grammar has no escape, so a value that quotes DSML markup can contain a
-/// literal `</｜DSML｜ parameter>`. A close is chosen only if the text after it
-/// parses as the rest of the call: well-formed parameters with distinct names
-/// and valid `string="false"` JSON. When the first close qualifies (every input
-/// the first-close rule parses), the result is unchanged.
+/// literal `</｜DSML｜ parameter>`. Closes are chosen so that the whole body
+/// parses: well-formed parameters with distinct names and valid
+/// `string="false"` JSON, each value ending at the earliest close that still
+/// lets the rest parse. When the first-close rule parses a body, this selects
+/// the same closes.
 ///
 /// A close followed by a malformed parameter header is never skipped: that
 /// header is a model error, not quoted data, so the call stays rejected as
@@ -102,13 +103,16 @@ struct ValueCloses<'a> {
     body: &'a str,
     /// Offset just past each `PARAMETER_END` in `body`, ascending.
     ends: Vec<usize>,
-    /// For each close whose remainder parses, the parameter names that
-    /// remainder defines; `None` when it does not parse.
-    complete: Vec<Option<Vec<&'a str>>>,
-    /// For each index into `ends`, the close a string value reaching it ends
-    /// at: the first index at or after it that is complete or followed by a
-    /// malformed parameter header. One extra trailing `None`.
-    choice: Vec<Option<usize>>,
+    /// For each close, whether the text after it parses as a run of
+    /// parameters when their names are not compared.
+    parses: Vec<bool>,
+    /// For each index into `ends`, the first index at or after it whose close
+    /// is followed by text that parses or by a malformed parameter header.
+    /// One extra trailing `None`.
+    next: Vec<Option<usize>>,
+    /// `(value start, index into ends)` for each parameter of the selected
+    /// parse of the whole body, ascending; empty when the body has no parse.
+    selected: Vec<(usize, usize)>,
 }
 
 impl<'a> ValueCloses<'a> {
@@ -119,21 +123,22 @@ impl<'a> ValueCloses<'a> {
             .collect();
         let mut closes = Self {
             body,
-            complete: vec![None; ends.len()],
-            choice: vec![None; ends.len() + 1],
+            parses: vec![false; ends.len()],
+            next: vec![None; ends.len() + 1],
+            selected: Vec::new(),
             ends,
         };
         // A remainder only depends on closes after it, so fill from the end.
         for index in (0..closes.ends.len()).rev() {
             let at = closes.ends[index];
-            closes.complete[index] = closes.names_from(at);
-            closes.choice[index] =
-                if closes.complete[index].is_some() || closes.malformed_header_at(at) {
-                    Some(index)
-                } else {
-                    closes.choice[index + 1]
-                };
+            closes.parses[index] = closes.parses_from(at);
+            closes.next[index] = if closes.parses[index] || closes.malformed_header_at(at) {
+                Some(index)
+            } else {
+                closes.next[index + 1]
+            };
         }
+        closes.selected = closes.select().unwrap_or_default();
         closes
     }
 
@@ -150,45 +155,148 @@ impl<'a> ValueCloses<'a> {
             .partition_point(|&end| end < value_start + PARAMETER_END.len())
     }
 
-    /// Whether `body[at..]` parses as a run of parameters.
-    fn complete_from(&self, at: usize) -> bool {
-        self.names_from(at).is_some()
-    }
-
-    /// The parameter names `body[at..]` defines, if it parses as a run of
-    /// parameters with distinct names and valid `string="false"` values.
-    fn names_from(&self, at: usize) -> Option<Vec<&'a str>> {
-        let body = self.body;
-        let rest = body[at..].trim_start();
-        if rest.is_empty() {
-            return Some(Vec::new());
-        }
-        let (name, string, value) = parameter_header(rest)?;
-        let value_start = body.len() - value.len();
+    /// The parameter opening `body[at..]` after whitespace: its name, whether
+    /// it is a string, where its value starts, and the earliest close its
+    /// value can end at.
+    fn parameter_at(&self, at: usize) -> Option<(&'a str, bool, usize, usize)> {
+        let (name, string, value) = parameter_header(self.body[at..].trim_start())?;
+        let value_start = self.body.len() - value.len();
         let first = self.first_close(value_start);
-        let chosen = if string { self.choice[first]? } else { first };
-        let names = self.complete.get(chosen)?.as_ref()?;
-        if names.contains(&name) {
+        let close = if string { self.next[first]? } else { first };
+        if !*self.parses.get(close)? {
             return None;
         }
         if !string {
-            let value_end = self.ends[chosen] - PARAMETER_END.len();
-            serde_json::from_str::<Value>(&body[value_start..value_end]).ok()?;
+            let value_end = self.ends[close] - PARAMETER_END.len();
+            serde_json::from_str::<Value>(&self.body[value_start..value_end]).ok()?;
         }
-        let mut names = names.clone();
-        names.push(name);
-        Some(names)
+        Some((name, string, value_start, close))
     }
 
-    /// Start of the close ending the value at `value_start`: the first close
-    /// followed by well-formed parameters or by a malformed parameter header,
-    /// else the first close.
-    fn value_end(&self, value_start: usize, string: bool) -> Option<usize> {
-        let first = self.first_close(value_start);
-        let chosen = if string {
-            self.choice[first].unwrap_or(first)
-        } else {
-            first
+    /// Whether `body[at..]` parses as a run of parameters with valid
+    /// `string="false"` values, without comparing their names.
+    fn parses_from(&self, at: usize) -> bool {
+        self.body[at..].trim_start().is_empty() || self.parameter_at(at).is_some()
+    }
+
+    /// The parse of the whole body to use, as `(value start, close)` pairs.
+    ///
+    /// A parse gives every parameter a distinct name. Parses are visited with
+    /// each string value, in order, ending at its earliest possible close, so
+    /// the first one visited is the first-close parse whenever that exists,
+    /// and it is then returned as is. Otherwise the parse whose values quote
+    /// the most balanced markup wins (see `unbalanced_markers`), the earliest
+    /// visited on a tie: a quoted example is normally complete, so its closes
+    /// pair with its own openers rather than with the call's.
+    ///
+    /// Only a repeated name or a rejected parse makes the search back up, so
+    /// an ordinary body takes one step per parameter. The step and parse
+    /// limits keep crafted input linear; past them the best parse found so
+    /// far stands.
+    fn select(&self) -> Option<Vec<(usize, usize)>> {
+        let mut steps = 64 + 4 * self.ends.len();
+        let mut parses_left = MAX_CLOSE_CANDIDATES;
+        let mut best: Option<(usize, Vec<(usize, usize)>)> = None;
+        // Parameters taken so far: name, whether it is a string, value start,
+        // chosen close.
+        let mut taken: Vec<(&'a str, bool, usize, usize)> = Vec::new();
+        let mut at = 0;
+        'search: while steps > 0 {
+            steps -= 1;
+            let mut advanced = false;
+            if self.body[at..].trim_start().is_empty() {
+                let parse: Vec<(usize, usize)> = taken
+                    .iter()
+                    .map(|&(_, _, value_start, close)| (value_start, close))
+                    .collect();
+                let first_closes = parse
+                    .iter()
+                    .all(|&(value_start, close)| close == self.first_close(value_start));
+                let cost = if first_closes {
+                    Some(0)
+                } else {
+                    parse
+                        .iter()
+                        .map(|&(value_start, close)| self.unbalanced_markers(value_start, close))
+                        .sum()
+                };
+                if let Some(cost) = cost
+                    && best.as_ref().is_none_or(|(least, _)| cost < *least)
+                {
+                    best = Some((cost, parse));
+                }
+                parses_left -= 1;
+                if cost == Some(0) || parses_left == 0 {
+                    break;
+                }
+            } else if let Some(parameter) = self
+                .parameter_at(at)
+                .filter(|&(name, ..)| taken.iter().all(|&(seen, ..)| seen != name))
+            {
+                at = self.ends[parameter.3];
+                taken.push(parameter);
+                advanced = true;
+            }
+            if advanced {
+                continue;
+            }
+            // Move the latest string value that has one to its next close.
+            while let Some((name, string, value_start, close)) = taken.pop() {
+                let later = self.next[close + 1].filter(|&later| self.parses[later]);
+                if let Some(later) = later.filter(|_| string) {
+                    at = self.ends[later];
+                    taken.push((name, string, value_start, later));
+                    continue 'search;
+                }
+            }
+            break;
+        }
+        best.map(|(_, parse)| parse)
+    }
+
+    /// Number of parameter openers and closes in the value from `value_start`
+    /// to `close` that do not pair up inside it.
+    ///
+    /// `None` when the value holds both a close with no opener of its own and,
+    /// after it, an opener it never closes. Such a value runs across the end
+    /// of one real parameter and the start of another, as with a repeated
+    /// parameter; it is not quoted data.
+    fn unbalanced_markers(&self, value_start: usize, close: usize) -> Option<usize> {
+        let value = &self.body[value_start..self.ends[close] - PARAMETER_END.len()];
+        let mut opens = value
+            .match_indices(PARAMETER_START)
+            .map(|(at, _)| at)
+            .peekable();
+        let (mut open, mut unpaired) = (0usize, 0usize);
+        for (end, _) in value.match_indices(PARAMETER_END) {
+            while opens.next_if(|&at| at < end).is_some() {
+                open += 1;
+            }
+            match open.checked_sub(1) {
+                Some(left) => open = left,
+                None => unpaired += 1,
+            }
+        }
+        // Every opener still open came after the last unpaired close.
+        let open = open + opens.count();
+        (open == 0 || unpaired == 0).then_some(open + unpaired)
+    }
+
+    /// Whether the whole body parses.
+    fn is_complete(&self) -> bool {
+        self.body.trim().is_empty() || !self.selected.is_empty()
+    }
+
+    /// Start of the close ending the value at `value_start`: the close the
+    /// selected parse gives it, else its first close, so a body without a
+    /// parse is rejected exactly as under the first-close rule.
+    fn value_end(&self, value_start: usize) -> Option<usize> {
+        let chosen = match self
+            .selected
+            .binary_search_by_key(&value_start, |&(start, _)| start)
+        {
+            Ok(found) => self.selected[found].1,
+            Err(_) => self.first_close(value_start),
         };
         self.ends.get(chosen).map(|end| end - PARAMETER_END.len())
     }
@@ -211,7 +319,7 @@ fn invocation_is_well_formed(invoke: &str) -> bool {
     if body.trim_start().starts_with('{') {
         return serde_json::from_str::<Map<String, Value>>(body).is_ok();
     }
-    ValueCloses::new(body).complete_from(0)
+    ValueCloses::new(body).is_complete()
 }
 
 /// Invocation closes tried per decision when resolving a quoted close. Each
@@ -586,7 +694,7 @@ impl InvokeEmitter for DeepSeekV41 {
                 .context("invalid DeepSeek V4.1 parameter header")?;
             let value_start = closes.body.len() - value.len();
             let value_end = closes
-                .value_end(value_start, string)
+                .value_end(value_start)
                 .context("incomplete DeepSeek V4.1 parameter")?;
             let raw = &closes.body[value_start..value_end];
             let remainder = &closes.body[value_end + PARAMETER_END.len()..];
@@ -1277,6 +1385,79 @@ mod tests {
                     serde_json::json!({"code": code, "language": "rust"}),
                 )],
             );
+        }
+    }
+
+    #[test]
+    fn quoted_call_reusing_the_parameter_names_is_data() {
+        // The quoted example is a whole call to the same tool, so every one of
+        // its parameters repeats a real name. Whichever real parameter holds
+        // the example, the only reading with distinct names keeps the example
+        // inside that value.
+        let quoted = "Doc:\n<｜DSML｜ calls>\n<｜DSML｜ invoke name=\"exec\">\n<｜DSML｜ parameter name=\"language\" string=\"true\">python</｜DSML｜ parameter>\n<｜DSML｜ parameter name=\"code\" string=\"true\">x</｜DSML｜ parameter>\n</｜DSML｜ invoke>\n</｜DSML｜ calls>\nend";
+        let parameter = |name: &str, value: &str| {
+            format!(
+                "<｜DSML｜ parameter name=\"{name}\" string=\"true\">{value}</｜DSML｜ parameter>\n"
+            )
+        };
+        for (language, code) in [("rust", quoted), (quoted, "y")] {
+            for order in [["language", "code"], ["code", "language"]] {
+                let value = |name: &str| if name == "language" { language } else { code };
+                let input = format!(
+                    "<｜DSML｜ calls>\n<｜DSML｜ invoke name=\"exec\">\n{}{}</｜DSML｜ invoke>\n</｜DSML｜ calls>",
+                    parameter(order[0], value(order[0])),
+                    parameter(order[1], value(order[1])),
+                );
+                assert_every_split(
+                    &input,
+                    UnifiedParserStartingState::None,
+                    vec![call(
+                        "exec",
+                        serde_json::json!({"language": language, "code": code}),
+                    )],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_parameter_is_not_read_as_quoted_data() {
+        // A real parameter emitted twice is a model error. No reading may hide
+        // it by folding the parameters between the two into one string value.
+        let parameter = |name: &str, value: &str| {
+            format!(
+                "<｜DSML｜ parameter name=\"{name}\" string=\"true\">{value}</｜DSML｜ parameter>\n"
+            )
+        };
+        for body in [
+            [
+                ("language", "python"),
+                ("language", "python"),
+                ("code", "x"),
+            ],
+            [
+                ("language", "python"),
+                ("code", "x"),
+                ("language", "python"),
+            ],
+            [("code", "x"), ("language", "python"), ("language", "rust")],
+        ] {
+            let body: String = body
+                .iter()
+                .map(|(name, value)| parameter(name, value))
+                .collect();
+            let input = format!(
+                "<｜DSML｜ calls>\n<｜DSML｜ invoke name=\"exec\">\n{body}</｜DSML｜ invoke>\n</｜DSML｜ calls>"
+            );
+            for split in (0..=input.len()).filter(|&i| input.is_char_boundary(i)) {
+                let mut parser = deepseek_v41_unified(&[]);
+                let mut output = UnifiedParserOutput::default();
+                let result = parser
+                    .parse_into(&input[..split], &mut output)
+                    .and_then(|()| parser.parse_into(&input[split..], &mut output));
+                let error = result.expect_err("repeated parameter").to_string();
+                assert!(error.contains("duplicate"), "split {split}: {error}");
+            }
         }
     }
 
